@@ -2,8 +2,13 @@
 // This file is distributed under the MIT License.
 
 #include "syscallfilter.h"
+#include <cstddef>
 #include <cassert>
 #include <linux/seccomp.h>
+#include <linux/filter.h>
+#include <linux/audit.h>
+#include <sys/prctl.h>
+#include <iostream>
 
 const uint32_t kSyscallOffset = offsetof(struct seccomp_data, nr);
 const uint32_t kArchOffset = offsetof(struct seccomp_data, arch);
@@ -13,7 +18,8 @@ const uint8_t kReturnAllow = 255;
 const uint8_t kPass = 0;
 
 const uint32_t X32_SYSCALL_BIT = 0x40000000;
-const uint32_t UPPER_LIMIT = x86_arch ? X32_SYSCALL_BIT - 1 : 0xffffffff;
+const uint32_t ARCH_NR = AUDIT_ARCH_X86_64;
+const uint32_t UPPER_LIMIT = (ARCH_NR == AUDIT_ARCH_X86_64) ? X32_SYSCALL_BIT - 1 : 0xffffffff;
 
 #define SAME_OFFSET(struct_a, struct_b, member)  \
     offsetof(struct_a, member) == offsetof(struct_b, member)
@@ -38,12 +44,19 @@ std::error_code SyscallFilter::install() {
     finish();
 
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
+	std::cerr << "prctl failed\n";
         return {errno, std::generic_category()};
     }
 
-    struct sock_fprog filter = { prog_.size(), prog_.data() };
+    struct sock_fprog filter = { static_cast<uint16_t>(prog_.size()), reinterpret_cast<sock_filter *>(prog_.data()) };
 
-    if (seccomp(SECCOMP_SET_MODE_FILTER, 0, &filter) != 0) {
+    for (int i = 0; i < filter.len; ++i) {
+        auto &f = filter.filter[i];
+        std::cerr << i << "]  " << std::hex << f.code << " " << f.k << "   " << int(f.jt) << " " << int(f.jf) << '\n';
+    }
+
+    if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &filter) != 0) {
+	std::cerr << "prctl SET_SECCOMP failed\n";
         return {errno, std::generic_category()};
     }
 
@@ -56,7 +69,7 @@ void SyscallFilter::finish() {
 
     assert(allowLine <= 253);
 
-    ret(SECCOMP_RET_KILL);
+    ret(SECCOMP_RET_TRACE);
     ret(SECCOMP_RET_ALLOW);
 
     // Update all jump instructions to point to the correct return line.
@@ -64,14 +77,14 @@ void SyscallFilter::finish() {
         auto &stmt = prog_[i];
         if (stmt.code & BPF_JMP) {
             if (stmt.jt == kReturnDeny) {
-                stmt.jt = denyLine - i;
+                stmt.jt = denyLine - i - 1;
             } else if (stmt.jt == kReturnAllow) {
-                stmt.jt = allowLine - i;
+                stmt.jt = allowLine - i - 1;
             }
             if (stmt.jf == kReturnDeny) {
-                stmt.jf = denyLine - i;
+                stmt.jf = denyLine - i - 1;
             } else if (stmt.jf == kReturnAllow) {
-                stmt.jf = allowLine - i;
+                stmt.jf = allowLine - i - 1;
             }
         }
     }
@@ -84,11 +97,11 @@ void SyscallFilter::load32_abs(uint32_t offset) {
 
 void SyscallFilter::jump_if_k(uint16_t code, uint32_t k, uint8_t jt, uint8_t jf) {
     code |= BPF_JMP | BPF_K;
-    prog_.push_back(BPF_JUMP(code, jt, jf, k));
+    prog_.push_back(BPF_JUMP(code, k, jt, jf));
 }
 
 void SyscallFilter::ret(uint32_t value) {
     uint16_t code = BPF_RET | BPF_K;
-    prog_.push_back(BPF_STMT(code, k));
+    prog_.push_back(BPF_STMT(code, value));
 }
 
