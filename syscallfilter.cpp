@@ -10,6 +10,7 @@
 #include <sys/prctl.h>
 #include <iostream>
 #include <sstream>
+#include <iomanip>
 
 const uint32_t kSyscallOffset = offsetof(struct seccomp_data, nr);
 const uint32_t kArchOffset = offsetof(struct seccomp_data, arch);
@@ -18,9 +19,16 @@ const uint8_t kReturnDeny = 254;
 const uint8_t kReturnAllow = 255;
 const uint8_t kPass = 0;
 
-const uint32_t X32_SYSCALL_BIT = 0x40000000;
+#if defined(__i386)
+const uint32_t ARCH_NR = AUDIT_ARCH_I386;
+#elif defined(__x86_64__)
 const uint32_t ARCH_NR = AUDIT_ARCH_X86_64;
-const uint32_t UPPER_LIMIT = (ARCH_NR == AUDIT_ARCH_X86_64) ? X32_SYSCALL_BIT - 1 : 0xffffffff;
+#else
+# error "Unsupported architecture"
+#endif
+
+const uint32_t X32_SYSCALL_BIT = 0x40000000;
+const uint32_t SYSCALL_UPPER_LIMIT = (ARCH_NR == AUDIT_ARCH_X86_64) ? X32_SYSCALL_BIT - 1 : 0xffffffff;
 
 #define SAME_OFFSET(struct_a, struct_b, member)  \
     offsetof(struct_a, member) == offsetof(struct_b, member)
@@ -34,7 +42,7 @@ SyscallFilter::SyscallFilter() {
     jump_if_k(BPF_JEQ, ARCH_NR, kPass, kReturnDeny);
 
     load32_abs(kSyscallOffset);
-    jump_if_k(BPF_JGT, UPPER_LIMIT, kReturnDeny, kPass);
+    jump_if_k(BPF_JGT, SYSCALL_UPPER_LIMIT, kReturnDeny, kPass);
 }
 
 void SyscallFilter::allow(uint32_t syscall) {
@@ -42,6 +50,10 @@ void SyscallFilter::allow(uint32_t syscall) {
 }
 
 std::error_code SyscallFilter::install(bool testing) {
+    if (prog_.size() > 250) {
+	return std::make_error_code(std::errc::value_too_large);
+    }
+
     finish(testing);
 
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
@@ -172,7 +184,7 @@ static std::pair<unsigned, const char *> bpf_rval[] = {
 };
 
 template <size_t N>
-static const char *bpf_translate(uint16_t code, std::pair<unsigned,const char *> lookup[N]) {
+static const char *bpf_translate(uint16_t code, const std::pair<unsigned,const char *> (&lookup)[N]) {
     for (const auto &p : lookup) {
         if (code == p.first) 
             return p.second;
@@ -181,28 +193,30 @@ static const char *bpf_translate(uint16_t code, std::pair<unsigned,const char *>
 }
 
 std::string SyscallFilter::toString(const Filter &filter) {
-    uint16_t clss = BPF_CLASS(filter.code);
-    std::string result = bpf_translate(clss, bpf_class);
+    std::ostringstream oss;
+    oss << std::showbase << std::internal << std::setfill('0');
 
+    uint16_t clss = BPF_CLASS(filter.code);
+    oss << bpf_translate(clss, bpf_class);
     if (clss == BPF_LD || clss == BPF_LDX) {
-        result += bpf_translate(BPF_SIZE(filter.code), bpf_size);
-        result += bpf_translate(BPF_MODE(filter.code), bpf_mode);
+        oss << bpf_translate(BPF_SIZE(filter.code), bpf_size);
+        oss << bpf_translate(BPF_MODE(filter.code), bpf_mode);
     } else if (clss == BPF_JMP) {
-        result += bpf_translate(BPF_OP(filter.code), bpf_jmp);
-        result += bpf_translate(BPF_SRC(filter.code), bpf_src);
+        oss << bpf_translate(BPF_OP(filter.code), bpf_jmp);
+        oss << bpf_translate(BPF_SRC(filter.code), bpf_src);
     } else if (clss == BPF_ALU) {
-        result += bpf_translate(BPF_OP(filter.code), bpf_op);
-        result += bpf_translate(BPF_SRC(filter.code), bpf_src);
+        oss << bpf_translate(BPF_OP(filter.code), bpf_op);
+        oss << bpf_translate(BPF_SRC(filter.code), bpf_src);
     } else if (clss == BPF_RET) {
-        result += bpf_translate(BPF_RVAL(filter.code), bpf_rval);
+        oss << bpf_translate(BPF_RVAL(filter.code), bpf_rval);
     }
 
-    result += " " + std::to_string(filter.k);
+    oss << " " << std::setw(10) << std::hex << filter.k << std::dec;
 
     if (clss == BPF_JMP) {
-        result += " ? " + std::to_string(filter.jt) + " : " + std::to_string(filter.jf);
+        oss << " ? " << static_cast<unsigned>(filter.jt) << " : " << static_cast<unsigned>(filter.jf);
     }
 
-    return result;
+    return oss.str();
 }
 
