@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2016 William W. Fisher (at gmail dot com)
+// Copyright (c) 2016 William W. Fisher (at gmail dot com)
 // This file is distributed under the MIT License.
 
 #ifndef SYSCALLFILTER_H_
@@ -23,11 +23,13 @@ public:
 
     void allow(uint32_t syscall);
 
-    std::error_code install();
+    std::error_code install(bool testing = false);
+
+    std::string toString() const;
 
 private:
 
-    // Filter is the Linux `sock_filter` structure
+    // Filter is the BPF `sock_filter` structure
     struct Filter {
         uint16_t code;
         uint8_t jt;
@@ -37,11 +39,13 @@ private:
 
     std::vector<Filter> prog_;
 
-    void finish();
+    void finish(bool testing);
 
     void load32_abs(uint32_t offset);
     void jump_if_k(uint16_t code, uint32_t k, uint8_t jt, uint8_t jf);
     void ret(uint32_t value);
+
+    static std::string toString(const Filter &filter);
 };
 
 

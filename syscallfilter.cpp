@@ -1,4 +1,4 @@
-// Copyright (c) 2015-2016 William W. Fisher (at gmail dot com)
+// Copyright (c) 2016 William W. Fisher (at gmail dot com)
 // This file is distributed under the MIT License.
 
 #include "syscallfilter.h"
@@ -9,6 +9,7 @@
 #include <linux/audit.h>
 #include <sys/prctl.h>
 #include <iostream>
+#include <sstream>
 
 const uint32_t kSyscallOffset = offsetof(struct seccomp_data, nr);
 const uint32_t kArchOffset = offsetof(struct seccomp_data, arch);
@@ -40,36 +41,39 @@ void SyscallFilter::allow(uint32_t syscall) {
     jump_if_k(BPF_JEQ, syscall, kReturnAllow, kPass);
 }
 
-std::error_code SyscallFilter::install() {
-    finish();
+std::error_code SyscallFilter::install(bool testing) {
+    finish(testing);
 
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
-	std::cerr << "prctl failed\n";
         return {errno, std::generic_category()};
     }
 
     struct sock_fprog filter = { static_cast<uint16_t>(prog_.size()), reinterpret_cast<sock_filter *>(prog_.data()) };
 
-    for (int i = 0; i < filter.len; ++i) {
-        auto &f = filter.filter[i];
-        std::cerr << i << "]  " << std::hex << f.code << " " << f.k << "   " << int(f.jt) << " " << int(f.jf) << '\n';
-    }
-
     if (prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &filter) != 0) {
-	std::cerr << "prctl SET_SECCOMP failed\n";
         return {errno, std::generic_category()};
     }
 
     return {};
 }
 
-void SyscallFilter::finish() {
+std::string SyscallFilter::toString() const {
+    std::ostringstream oss;
+
+    for (int i = 0; i < prog_.size(); ++i) {
+        oss << toString(prog_[i]) << '\n';
+    }
+
+    return oss.str();
+}
+
+void SyscallFilter::finish(bool testing) {
     size_t denyLine = prog_.size();
     size_t allowLine = denyLine + 1;
 
     assert(allowLine <= 253);
 
-    ret(SECCOMP_RET_TRACE);
+    ret(testing ? SECCOMP_RET_TRACE : SECCOMP_RET_KILL);
     ret(SECCOMP_RET_ALLOW);
 
     // Update all jump instructions to point to the correct return line.
@@ -103,5 +107,102 @@ void SyscallFilter::jump_if_k(uint16_t code, uint32_t k, uint8_t jt, uint8_t jf)
 void SyscallFilter::ret(uint32_t value) {
     uint16_t code = BPF_RET | BPF_K;
     prog_.push_back(BPF_STMT(code, value));
+}
+
+#define PAIR(name)   { BPF_ ## name, #name }
+#define PAIR_(name)   { BPF_ ## name, "," #name }
+
+static std::pair<unsigned,const char *> bpf_class[] = {
+    PAIR(LD),
+    PAIR(LDX),
+    PAIR(ST),
+    PAIR(STX),
+    PAIR(ALU),
+    PAIR(JMP),
+    PAIR(RET),
+    PAIR(MISC)
+};
+
+static std::pair<unsigned, const char *> bpf_size[] = {
+    PAIR_(W),
+    PAIR_(H),
+    PAIR_(B)
+};
+
+static std::pair<unsigned, const char *> bpf_mode[] = {
+    PAIR_(IMM),
+    PAIR_(ABS),
+    PAIR_(IND),
+    PAIR_(MEM),
+    PAIR_(LEN),
+    PAIR_(MSH)
+};
+
+static std::pair<unsigned, const char *> bpf_jmp[] = {
+    PAIR_(JA),
+    PAIR_(JEQ),
+    PAIR_(JGT),
+    PAIR_(JGE),
+    PAIR_(JSET)
+};
+
+static std::pair<unsigned, const char *> bpf_op[] = {
+    PAIR_(ADD),
+    PAIR_(SUB),
+    PAIR_(MUL),
+    PAIR_(DIV),
+    PAIR_(OR),
+    PAIR_(AND),
+    PAIR_(LSH),
+    PAIR_(RSH),
+    PAIR_(NEG),
+    PAIR_(MOD),
+    PAIR_(XOR)
+};
+
+static std::pair<unsigned, const char *> bpf_src[] = {
+    PAIR_(K),
+    PAIR_(X)
+};
+
+static std::pair<unsigned, const char *> bpf_rval[] = {
+    PAIR_(K),
+    PAIR_(X),
+    PAIR_(A)
+};
+
+template <size_t N>
+static const char *bpf_translate(uint16_t code, std::pair<unsigned,const char *> lookup[N]) {
+    for (const auto &p : lookup) {
+        if (code == p.first) 
+            return p.second;
+    }
+    return "?";
+}
+
+std::string SyscallFilter::toString(const Filter &filter) {
+    uint16_t clss = BPF_CLASS(filter.code);
+    std::string result = bpf_translate(clss, bpf_class);
+
+    if (clss == BPF_LD || clss == BPF_LDX) {
+        result += bpf_translate(BPF_SIZE(filter.code), bpf_size);
+        result += bpf_translate(BPF_MODE(filter.code), bpf_mode);
+    } else if (clss == BPF_JMP) {
+        result += bpf_translate(BPF_OP(filter.code), bpf_jmp);
+        result += bpf_translate(BPF_SRC(filter.code), bpf_src);
+    } else if (clss == BPF_ALU) {
+        result += bpf_translate(BPF_OP(filter.code), bpf_op);
+        result += bpf_translate(BPF_SRC(filter.code), bpf_src);
+    } else if (clss == BPF_RET) {
+        result += bpf_translate(BPF_RVAL(filter.code), bpf_rval);
+    }
+
+    result += " " + std::to_string(filter.k);
+
+    if (clss == BPF_JMP) {
+        result += " ? " + std::to_string(filter.jt) + " : " + std::to_string(filter.jf);
+    }
+
+    return result;
 }
 
