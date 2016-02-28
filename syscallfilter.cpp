@@ -15,6 +15,10 @@
 const uint32_t kSyscallOffset = offsetof(struct seccomp_data, nr);
 const uint32_t kArchOffset = offsetof(struct seccomp_data, arch);
 
+// This implementation is limited to 250 syscalls. (To support more, we need
+// to add intermediate return instructions.)
+
+const size_t kMaxSycalls = 250;
 const uint8_t kReturnDeny = 254;
 const uint8_t kReturnAllow = 255;
 const uint8_t kPass = 0;
@@ -27,34 +31,61 @@ const uint32_t ARCH_NR = AUDIT_ARCH_X86_64;
 # error "Unsupported architecture"
 #endif
 
-const uint32_t X32_SYSCALL_BIT = 0x40000000;
-const uint32_t SYSCALL_UPPER_LIMIT = (ARCH_NR == AUDIT_ARCH_X86_64) ? X32_SYSCALL_BIT - 1 : 0xffffffff;
-
 #define SAME_OFFSET(struct_a, struct_b, member)  \
     offsetof(struct_a, member) == offsetof(struct_b, member)
 
-
-SyscallFilter::SyscallFilter() {
-    static_assert(sizeof(Filter) == 8, "Unexpected size");
+/// \brief Construct empty syscall filter.
+/// 
+/// Creates an empty syscall whitelist. Syscalls can be added to the whitelist 
+/// using the allow member function. Normally, a syscall that is not in the 
+/// whitelist will cause the OS to kill the program. If you enable the `trap`
+/// option, a disallowed syscall will raise SIGSYS.
+/// 
+/// \param trap If true, denied syscall causes signal, instead of killing
+/// program.
+/// 
+SyscallFilter::SyscallFilter(bool trap) : trap_{trap} {
+    static_assert(sizeof(Filter) == sizeof(sock_filter), "Unexpected size");
     static_assert(SAME_OFFSET(Filter, sock_filter, code), "Unexpected offset");
+    static_assert(SAME_OFFSET(Filter, sock_filter, jt), "Unexpected offset");
+    static_assert(SAME_OFFSET(Filter, sock_filter, jf), "Unexpected offset");
+    static_assert(SAME_OFFSET(Filter, sock_filter, k), "Unexpected offset");
 
+    // Verify architecture.
     load32_abs(kArchOffset);
     jump_if_k(BPF_JEQ, ARCH_NR, kPass, kReturnDeny);
 
+    // Load syscall number.
     load32_abs(kSyscallOffset);
-    jump_if_k(BPF_JGT, SYSCALL_UPPER_LIMIT, kReturnDeny, kPass);
 }
 
+/// \brief Allow a syscall.
+/// 
+/// \param syscall syscall number from <sys/syscall.h>
+/// 
 void SyscallFilter::allow(uint32_t syscall) {
+    // Allow if syscall matches.
     jump_if_k(BPF_JEQ, syscall, kReturnAllow, kPass);
 }
 
-std::error_code SyscallFilter::install(bool testing) {
-    if (prog_.size() > 250) {
-	return std::make_error_code(std::errc::value_too_large);
+/// \brief Install the system call filter.
+/// 
+/// Finishes the syscall filter, then attempts to install it. 
+/// This function will return an error if called more than once.
+/// 
+/// \returns error code from prctl/seccomp.
+/// 
+std::error_code SyscallFilter::install() {
+    if (installed_) {
+        return std::make_error_code(std::errc::invalid_argument);
     }
 
-    finish(testing);
+    if (prog_.size() > kMaxSycalls) {
+	   return std::make_error_code(std::errc::value_too_large);
+    }
+
+    installed_ = true;
+    finish();
 
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)) {
         return {errno, std::generic_category()};
@@ -69,6 +100,10 @@ std::error_code SyscallFilter::install(bool testing) {
     return {};
 }
 
+/// \brief Produce textual description of syscall filter.
+/// 
+/// \returns syscall filter as a string.
+/// 
 std::string SyscallFilter::toString() const {
     std::ostringstream oss;
 
@@ -79,13 +114,18 @@ std::string SyscallFilter::toString() const {
     return oss.str();
 }
 
-void SyscallFilter::finish(bool testing) {
+/// \brief Finish the syscall filter.
+/// 
+/// Write the final part of the syscall filter. Update jt/jf jumps to point to
+/// the correct return line.
+/// 
+void SyscallFilter::finish() {
     size_t denyLine = prog_.size();
     size_t allowLine = denyLine + 1;
 
     assert(allowLine <= 253);
 
-    ret(testing ? SECCOMP_RET_TRACE : SECCOMP_RET_KILL);
+    ret(trap_ ? SECCOMP_RET_TRAP : SECCOMP_RET_KILL);
     ret(SECCOMP_RET_ALLOW);
 
     // Update all jump instructions to point to the correct return line.
@@ -106,20 +146,25 @@ void SyscallFilter::finish(bool testing) {
     }
 }
 
+/// \brief Append "LD,W,ABS <offset>" instruction to filter.
 void SyscallFilter::load32_abs(uint32_t offset) {
     uint16_t code = BPF_LD | BPF_W | BPF_ABS;
     prog_.push_back(BPF_STMT(code, offset));
 }
 
+/// \brief Append "JMP,code,K <k> ? <jt> : <jf>" instruction to filter.
 void SyscallFilter::jump_if_k(uint16_t code, uint32_t k, uint8_t jt, uint8_t jf) {
     code |= BPF_JMP | BPF_K;
     prog_.push_back(BPF_JUMP(code, k, jt, jf));
 }
 
+/// \brief Append "RET <value>" instruction to filter.
 void SyscallFilter::ret(uint32_t value) {
     uint16_t code = BPF_RET | BPF_K;
     prog_.push_back(BPF_STMT(code, value));
 }
+
+// Helper macros and tables for converting BPF Filter instruction to a string.
 
 #define PAIR(name)   { BPF_ ## name, #name }
 #define PAIR_(name)   { BPF_ ## name, "," #name }
@@ -192,6 +237,12 @@ static const char *bpf_translate(uint16_t code, const std::pair<unsigned,const c
     return "?";
 }
 
+/// \brief Convert filter instruction to a string.
+/// 
+/// \param filter instruction
+/// 
+/// \returns string representation of filter
+/// 
 std::string SyscallFilter::toString(const Filter &filter) {
     std::ostringstream oss;
     oss << std::showbase << std::internal << std::setfill('0');

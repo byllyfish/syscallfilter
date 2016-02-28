@@ -19,11 +19,11 @@
 
 class SyscallFilter {
 public:
-    SyscallFilter();
+    SyscallFilter(bool trap = false);
 
     void allow(uint32_t syscall);
 
-    std::error_code install(bool testing = false);
+    std::error_code install();
 
     std::string toString() const;
 
@@ -38,8 +38,10 @@ private:
     };
 
     std::vector<Filter> prog_;
+    bool trap_ = false;
+    bool installed_ = false;
 
-    void finish(bool testing);
+    void finish();
 
     void load32_abs(uint32_t offset);
     void jump_if_k(uint16_t code, uint32_t k, uint8_t jt, uint8_t jf);
