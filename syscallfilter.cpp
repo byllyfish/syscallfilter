@@ -19,8 +19,9 @@ const uint32_t kArchOffset = offsetof(struct seccomp_data, arch);
 // to add intermediate return instructions.)
 
 const size_t kMaxSycalls = 250;
-const uint8_t kReturnDeny = 254;
-const uint8_t kReturnAllow = 255;
+const uint8_t kReturnDeny = 253;
+const uint8_t kReturnAllow = 254;
+const uint8_t kReturnError = 255;
 const uint8_t kPass = 0;
 
 #if defined(__i386)
@@ -37,13 +38,14 @@ const uint32_t ARCH_NR = AUDIT_ARCH_X86_64;
 /// \brief Construct empty syscall filter.
 /// 
 /// Creates an empty syscall whitelist. Syscalls can be added to the whitelist 
-/// using the allow member function. Normally, a syscall that is not in the 
-/// whitelist will cause the OS to kill the program. If you enable the `trap`
-/// option, a disallowed syscall will raise SIGSYS.
+/// using the `allow` member function. A syscall that is not in the whitelist
+/// will cause the program to terminate. 
+/// 
+/// If you enable the `trap` option, a disallowed syscall will raise SIGSYS 
+/// instead.
 /// 
 /// \param trap If true, denied syscall causes signal, instead of killing
-/// program.
-/// 
+/// program. Note recommended for production use due to security concerns.
 SyscallFilter::SyscallFilter(bool trap) : trap_{trap} {
     static_assert(sizeof(Filter) == sizeof(sock_filter), "Unexpected size");
     static_assert(SAME_OFFSET(Filter, sock_filter, code), "Unexpected offset");
@@ -59,13 +61,23 @@ SyscallFilter::SyscallFilter(bool trap) : trap_{trap} {
     load32_abs(kSyscallOffset);
 }
 
-/// \brief Allow a syscall.
+/// \brief Allow a syscall to execute normally.
 /// 
 /// \param syscall syscall number from <sys/syscall.h>
-/// 
-void SyscallFilter::allow(uint32_t syscall) {
+void SyscallFilter::allow(SyscallNumber syscall) {
     // Allow if syscall matches.
     jump_if_k(BPF_JEQ, syscall, kReturnAllow, kPass);
+}
+
+/// \brief Deny a syscall by having it return an error.
+/// 
+/// For special circumstances only. It's best to leave the syscall out of the 
+/// whitelist entirely, rather than let it return unimplemented.
+///  
+/// \param syscall syscall number from <sys/syscall.h>
+void SyscallFilter::deny(SyscallNumber syscall) {
+    // Error if syscall matches.
+    jump_if_k(BPF_JEQ, syscall, kReturnError, kPass);
 }
 
 /// \brief Install the system call filter.
@@ -74,7 +86,6 @@ void SyscallFilter::allow(uint32_t syscall) {
 /// This function will return an error if called more than once.
 /// 
 /// \returns error code from prctl/seccomp.
-/// 
 std::error_code SyscallFilter::install() {
     if (installed_) {
         return std::make_error_code(std::errc::invalid_argument);
@@ -114,6 +125,7 @@ std::string SyscallFilter::toString() const {
     return oss.str();
 }
 
+
 /// \brief Finish the syscall filter.
 /// 
 /// Write the final part of the syscall filter. Update jt/jf jumps to point to
@@ -122,25 +134,33 @@ std::string SyscallFilter::toString() const {
 void SyscallFilter::finish() {
     size_t denyLine = prog_.size();
     size_t allowLine = denyLine + 1;
+    size_t errorLine = allowLine + 1;
 
-    assert(allowLine <= 253);
+    assert(denyLine <= kMaxSyscalls);
 
     ret(trap_ ? SECCOMP_RET_TRAP : SECCOMP_RET_KILL);
     ret(SECCOMP_RET_ALLOW);
+    ret(SECCOMP_RET_ERROR);
 
     // Update all jump instructions to point to the correct return line.
     for (size_t i = 0; i < prog_.size(); ++i) {
         auto &stmt = prog_[i];
         if (stmt.code & BPF_JMP) {
+            // Translate true jump offset.
             if (stmt.jt == kReturnDeny) {
                 stmt.jt = denyLine - i - 1;
             } else if (stmt.jt == kReturnAllow) {
                 stmt.jt = allowLine - i - 1;
+            } else if (stmt.jt == kReturnError) {
+                stmt.jt = errorLine - i - 1;
             }
+            // Translate false jump offset.
             if (stmt.jf == kReturnDeny) {
                 stmt.jf = denyLine - i - 1;
             } else if (stmt.jf == kReturnAllow) {
                 stmt.jf = allowLine - i - 1;
+            } else if (stmt.jf == kReturnError) {
+                stmt.jf = errorLine - i - 1;
             }
         }
     }

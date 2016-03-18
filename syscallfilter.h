@@ -7,6 +7,13 @@
 #include <vector>
 #include <system_error>
 
+/// \brief Simple API for a seccomp-bpf filter.
+/// 
+/// Implements a seccomp-bpf filter that allows only specified system calls.
+/// If a system call is not specified, the program will stop.
+/// 
+/// If a system call is denied, it returns an error.
+/// 
 /// Usage:
 /// 
 ///   SyscallFilter filter;
@@ -19,9 +26,12 @@
 
 class SyscallFilter {
 public:
+    using SyscallNumber = uint32_t;
+
     SyscallFilter(bool trap = false);
 
-    void allow(uint32_t syscall);
+    void allow(SyscallNumber syscall);
+    void deny(SyscallNumber syscall);
 
     std::error_code install();
 

@@ -1,0 +1,11 @@
+BasedOnStyle: google
+
+PointerBindsToType: false
+DerivePointerBinding: false
+Standard: C++11
+AlwaysBreakTemplateDeclarations: true
+Cpp11BracedListStyle: true
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: false
