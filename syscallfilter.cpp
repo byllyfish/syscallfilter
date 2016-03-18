@@ -15,10 +15,10 @@
 const uint32_t kSyscallOffset = offsetof(struct seccomp_data, nr);
 const uint32_t kArchOffset = offsetof(struct seccomp_data, arch);
 
-// This implementation is limited to 250 syscalls. (To support more, we need
+// This implementation is limited to 245 syscalls. (To support more, we need
 // to add intermediate return instructions.)
 
-const size_t kMaxSycalls = 250;
+const size_t kMaxSyscalls = 245;
 const uint8_t kReturnDeny = 253;
 const uint8_t kReturnAllow = 254;
 const uint8_t kReturnError = 255;
@@ -91,7 +91,7 @@ std::error_code SyscallFilter::install() {
     return std::make_error_code(std::errc::invalid_argument);
   }
 
-  if (prog_.size() > kMaxSycalls) {
+  if (prog_.size() > kMaxSyscalls) {
     return std::make_error_code(std::errc::value_too_large);
   }
 
@@ -115,11 +115,10 @@ std::error_code SyscallFilter::install() {
 /// \brief Produce textual description of syscall filter.
 ///
 /// \returns syscall filter as a string.
-///
 std::string SyscallFilter::toString() const {
   std::ostringstream oss;
 
-  for (int i = 0; i < prog_.size(); ++i) {
+  for (unsigned i = 0; i < prog_.size(); ++i) {
     oss << toString(prog_[i]) << '\n';
   }
 
@@ -130,7 +129,6 @@ std::string SyscallFilter::toString() const {
 ///
 /// Write the final part of the syscall filter. Update jt/jf jumps to point to
 /// the correct return line.
-///
 void SyscallFilter::finish() {
   size_t denyLine = prog_.size();
   size_t allowLine = denyLine + 1;
@@ -140,7 +138,7 @@ void SyscallFilter::finish() {
 
   ret(trap_ ? SECCOMP_RET_TRAP : SECCOMP_RET_KILL);
   ret(SECCOMP_RET_ALLOW);
-  ret(SECCOMP_RET_ERROR);
+  ret(SECCOMP_RET_ERRNO);
 
   // Update all jump instructions to point to the correct return line.
   for (size_t i = 0; i < prog_.size(); ++i) {
@@ -229,7 +227,6 @@ static const char *bpf_translate(
 /// \param filter instruction
 ///
 /// \returns string representation of filter
-///
 std::string SyscallFilter::toString(const Filter &filter) {
   std::ostringstream oss;
   oss << std::showbase << std::internal << std::setfill('0');

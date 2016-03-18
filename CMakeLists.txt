@@ -7,7 +7,7 @@ set(SOURCES
     syscallfilter.cpp
 )
 
-set(CMAKE_CXX_FLAGS -std=c++11 -Wall)
+set(CMAKE_CXX_FLAGS "-std=c++11 -Wall")
 add_executable(syscallfilter ${SOURCES})
 
 add_custom_target(format-all
