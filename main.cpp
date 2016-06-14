@@ -6,12 +6,7 @@
 #include <iostream>
 #include "syscallfilter.h"
 
-enum ReadPerm {
-  kAllowRead,
-  kDenyRead,
-  kKillRead,
-  kDontRead
-};
+enum ReadPerm { kAllowRead, kDenyRead, kKillRead, kDontRead };
 
 int main(int argc, char **argv) {
   ReadPerm readPerm = kKillRead;
@@ -51,15 +46,15 @@ int main(int argc, char **argv) {
   std::cout << filter.toString() << '\n';
 
   if (readPerm != kDontRead) {
-  char buf = 0;
-  int result = read(0, &buf, 1);
-  if (result < 0) {
-    int err = errno;
-    std::cerr << "read() errno=" << err << '\n';
-    return err;
-  } else {
-    std::cerr << "read() returned " << result << std::endl;    
-  }
+    char buf = 0;
+    int result = read(0, &buf, 1);
+    if (result < 0) {
+      int err = errno;
+      std::cerr << "read() errno=" << err << '\n';
+      return err;
+    } else {
+      std::cerr << "read() returned " << result << std::endl;
+    }
   }
 
   return 0;
