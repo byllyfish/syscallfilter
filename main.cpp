@@ -10,6 +10,7 @@ enum ReadPerm {
   kAllowRead,
   kDenyRead,
   kKillRead,
+  kDontRead
 };
 
 int main(int argc, char **argv) {
@@ -21,6 +22,8 @@ int main(int argc, char **argv) {
       readPerm = kAllowRead;
     } else if (arg == "deny_read") {
       readPerm = kDenyRead;
+    } else if (arg == "dont_read") {
+      readPerm = kDontRead;
     } else {
       std::cerr << "Argument must be 'allow_read' or 'deny_read'\n";
       return 1;
@@ -45,15 +48,18 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  std::cout << "SyscallFilter:\n";
   std::cout << filter.toString() << '\n';
 
-  std::cout << "Press any letter key to continue...";
+  if (readPerm != kDontRead) {
   char buf = 0;
-  if (read(0, &buf, 1) < 0) {
+  int result = read(0, &buf, 1);
+  if (result < 0) {
     int err = errno;
-    std::cerr << "SYS_read errno=" << err << '\n';
+    std::cerr << "read() errno=" << err << '\n';
     return err;
+  } else {
+    std::cerr << "read() returned " << result << std::endl;    
+  }
   }
 
   return 0;

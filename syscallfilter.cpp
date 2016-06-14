@@ -138,7 +138,7 @@ void SyscallFilter::finish() {
 
   ret(trap_ ? SECCOMP_RET_TRAP : SECCOMP_RET_KILL);
   ret(SECCOMP_RET_ALLOW);
-  ret(SECCOMP_RET_ERRNO);
+  ret(SECCOMP_RET_ERRNO | ENOSYS);
 
   // Update all jump instructions to point to the correct return line.
   for (size_t i = 0; i < prog_.size(); ++i) {
