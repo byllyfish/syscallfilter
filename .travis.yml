@@ -18,8 +18,3 @@ matrix:
             - g++-4.9
       env: 
         - COMPILER=g++-4.9
-
-addons:
-  apt:
-    packages:
-      - libpcap-dev

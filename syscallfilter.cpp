@@ -205,7 +205,14 @@ static std::pair<unsigned, const char *> bpf_jmp[] = {
 
 static std::pair<unsigned, const char *> bpf_op[] = {
     PAIR_(ADD), PAIR_(SUB), PAIR_(MUL), PAIR_(DIV), PAIR_(OR), PAIR_(AND),
-    PAIR_(LSH), PAIR_(RSH), PAIR_(NEG), PAIR_(MOD), PAIR_(XOR)};
+    PAIR_(LSH), PAIR_(RSH), PAIR_(NEG)
+#if defined(BPF_MOD)
+    , PAIR_(MOD)
+#endif // defined(BPF_MOD)
+#if defined(BPF_XOR)
+    , PAIR_(XOR)
+#endif // defined(BPF_XOR)
+};
 
 static std::pair<unsigned, const char *> bpf_src[] = {PAIR_(K), PAIR_(X)};
 
