@@ -7,7 +7,6 @@ script:
   - make
   - make test
 
-
 matrix:
   include:
     - compiler: gcc
@@ -20,3 +19,7 @@ matrix:
       env: 
         - COMPILER=g++-4.9
 
+addons:
+  apt:
+    packages:
+      - libpcap-dev
