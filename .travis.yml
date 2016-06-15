@@ -1,5 +1,4 @@
 language: cpp
-dist: trusty
 
 script: 
   - mkdir Build
@@ -7,3 +6,15 @@ script:
   - cmake ..
   - make
   - make test
+
+
+matrix:
+  include:
+    - compiler: gcc
+      addons:
+        apt:
+          sources:
+            - ubuntu-toolchain-r-test
+          packages:
+            - g++-4.9
+      env: COMPILER=g++-4.9
